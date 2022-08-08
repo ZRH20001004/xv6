@@ -119,5 +119,6 @@ sys_sigreturn(void)
 {
   struct proc *p = myproc();
   *(p->trapframe) = p->intrframe;
+  p->passed = 0;
   return 0;
 }

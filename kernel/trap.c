@@ -84,7 +84,7 @@ usertrap(void)
       (p->passed)++;
       if ((p->passed) == (p->ticks))
       {
-        p->passed = 0;
+        p->passed = -1;
         p->intrframe = *(p->trapframe);
         p->trapframe->epc = p->handler;
       }
