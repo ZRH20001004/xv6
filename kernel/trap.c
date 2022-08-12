@@ -68,9 +68,50 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+    if(r_scause() == 15 && r_stval() < MAXVA){
+      pte_t *pte;
+      uint64 va, pa;
+      char *mem;
+      uint flags;
+
+      va = r_stval();
+      if((pa = walkaddr(p->pagetable, va)) == 0)
+      {
+        printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+        printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
+        p->killed = 1;
+        exit(-1);
+      }
+      pte = walk(p->pagetable, va, 0);
+      if ((*pte & PTE_COW) == 0)
+      {
+        printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+        printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
+        p->killed = 1;
+        exit(-1);
+      }
+      if((mem = kalloc()) == 0){
+        kfree(mem);
+        printf("cow no free mem\n");
+        p->killed = 1;
+        exit(-1);
+      }
+      memmove(mem, (void*)pa, PGSIZE);
+      flags = PTE_FLAGS(*pte);
+      flags = flags | PTE_W;
+      flags &= (~PTE_COW);
+      va = PGROUNDDOWN(va);
+      uvmunmap(p->pagetable, va, 1, 1);
+      if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, flags) != 0)
+      {
+        kfree(mem);
+        p->killed = 1;
+      }
+    } else {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   }
 
   if(p->killed)
