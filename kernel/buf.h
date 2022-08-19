@@ -4,9 +4,10 @@ struct buf {
   uint dev;
   uint blockno;
   struct sleeplock lock;
-  uint refcnt;
-  struct buf *prev; // LRU cache list
-  struct buf *next;
+  uint refcnt; 
+  struct buf *prev;
+  struct buf *next; // LRU cache list
   uchar data[BSIZE];
+  uint timestamp; //time stamp
 };
 
