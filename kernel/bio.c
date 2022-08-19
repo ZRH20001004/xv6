@@ -112,64 +112,53 @@ bget(uint dev, uint blockno)
   release(&bcache.locks[idx]);
 
   acquire(&bcache.lock);
-
-  for(int i = 0; i < NBUCKET; i++){
-    int min = -1;
-    struct buf* t;
-    int k = (idx + i) % NBUCKET;
-    acquire(&bcache.locks[k]);
-    for(t = bcache.head[k].next; t != &bcache.head[k]; t = t->next){
-      if(t->dev == dev && t->blockno == blockno){
-        b = t;
-        b->refcnt++;
-        release(&bcache.locks[k]);
-        release(&bcache.lock);
-        acquiresleep(&b->lock);
-        return b;
-      }
-
-      if(t->refcnt == 0){
-        if(min < 0 || t->timestamp < min)
-        {
-          min = t->timestamp;
-          b = t;
-        }
-      }
-    }
-
-    if(min >= 0){
-      if(k == idx){
-        b->dev = dev;
-        b->blockno = blockno;
-        b->valid = 0;
-        b->refcnt = 1;
-        release(&bcache.locks[k]);
-        release(&bcache.lock);
-        acquiresleep(&b->lock);
-        return b;
-      }
-      b->prev->next = b->next;
-      b->next->prev = b->prev;
-      release(&bcache.locks[k]);
-      acquire(&bcache.locks[idx]);
-      b->prev = &bcache.head[idx];
-      b->next = bcache.head[idx].next;
-      bcache.head[idx].next->prev = b;
-      bcache.head[idx].next = b;
-      b->dev = dev;
-      b->blockno = blockno;
-      b->valid = 0;
-      b->refcnt = 1;
+  acquire(&bcache.locks[idx]);
+  for(b = bcache.head[idx].next; b != &bcache.head[idx]; b = b->next){
+    if(b->dev == dev && b->blockno == blockno){
+      b->refcnt++;
       release(&bcache.locks[idx]);
       release(&bcache.lock);
       acquiresleep(&b->lock);
       return b;
     }
-    release(&bcache.locks[k]);
+  }
+  release(&bcache.locks[idx]);
+
+  int min = ((unsigned)-1)>>1; // min timestamp;
+  int ref = -1;     
+  struct buf* t;
+  for(int i = 0; i < NBUCKET; i++){
+    acquire(&bcache.locks[i]);
+    for(t = bcache.head[i].next; t != &bcache.head[i]; t = t->next){
+      if(t->refcnt == 0 && t->timestamp < min){
+        b = t;
+        ref = i;
+        min = t->timestamp;
+      }
+    }
+    release(&bcache.locks[i]);
   }
 
+  if(ref >= 0){
+    acquire(&bcache.locks[ref]);
+    (b->prev)->next = b->next;
+    (b->next)->prev = b->prev;
+    release(&bcache.locks[ref]);
+    acquire(&bcache.locks[idx]);
+    b->prev = &bcache.head[idx];
+    b->next = bcache.head[idx].next;
+    (bcache.head[idx].next)->prev = b;
+    bcache.head[idx].next = b;
+    b->dev = dev;
+    b->blockno = blockno;
+    b->valid = 0;
+    b->refcnt = 1;
+    release(&bcache.locks[idx]);
+    release(&bcache.lock);
+    acquiresleep(&b->lock);
+    return b;
+  }
   release(&bcache.lock);
-
 
 
 
