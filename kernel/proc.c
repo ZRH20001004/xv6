@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -301,6 +305,14 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+   for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].addr){
+      np->vmas[i] = p->vmas[i];
+      filedup(p->vmas[i].f);
+    }
+  }
+
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -343,6 +355,36 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  for(int i = 0; i < NVMA; i++)
+  {
+    struct vma_t* vma = p->vmas + i;
+    if(!vma->addr)
+      continue;
+    if(vma->flags & MAP_SHARED)
+    {
+      for(uint64 va = vma->addr; va < vma->addr + vma->len; va+=PGSIZE){
+        if(uvmgetdirty(p->pagetable, va) == 0){
+          begin_op();
+          ilock(vma->f->ip);
+          uint64 pa = walkaddr(p->pagetable, va);
+          if(writei(vma->f->ip, 0, pa, va-(vma->addr)+vma->offset, PGSIZE) < 0){
+            iunlock(vma->f->ip);
+            end_op();
+            panic("exit: munmap");
+          }
+          iunlock(vma->f->ip);
+          end_op();
+        }
+      }
+    }
+    vma->addr = 0;
+    vma->len = 0;
+    vma->prot = 0;
+    vma->flags = 0;
+    vma->offset = 0;
+    vma->f = 0;
+  }
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){

@@ -15,6 +15,12 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
+
+extern struct {
+  struct spinlock lock;
+  struct file file[NFILE];
+} ftable;
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -483,4 +489,126 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  int len, prot, flags, offset;
+  struct file* f;
+  struct vma_t* vma = 0;
+
+  if(argaddr(0, &addr) < 0 || argint(1, &len) < 0 || argint(2, &prot) < 0
+  || argint(3, &flags) < 0 || argfd(4, 0, &f) < 0 || argint(5, &offset) < 0)
+    return -1;
+
+  if((!f->readable && (prot & (PROT_READ)))
+     || (!f->writable && (prot & PROT_WRITE) && !(flags & MAP_PRIVATE)))
+    return -1;
+
+  addr = MMAP;
+  struct proc* p = myproc();
+  struct vma_t* vmas = p->vmas;
+
+
+  for(int i = 0; i < NVMA; i++){
+    if(vmas[i].addr){
+      if((vmas[i].addr + vmas[i].len) > addr)
+        addr = vmas[i].addr + vmas[i].len;
+    } else if(vma == 0){
+      vma = vmas + i;
+    }
+  }
+
+  if(!vma)
+    return -1;
+
+  addr = PGROUNDUP(addr);
+  if(addr + len > TRAPFRAME)
+    return -1;
+
+  vma->addr = addr;
+  vma->len = len;
+  vma->prot = prot;
+  vma->flags = flags;
+  vma->offset = offset;
+  vma->f = f;
+  
+  filedup(f);
+  return addr;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int len;
+  struct vma_t* vma = 0;
+  struct vma_t* vmas;
+
+  if(argaddr(0, &addr) < 0 || argint(1, &len) < 0)
+    return -1;
+
+  if(len == 0)
+    return 0;
+
+  struct proc* p = myproc();
+  vmas = p->vmas;
+  for(int i = 0; i < NVMA; i++){
+    if(vmas[i].addr && addr >= vmas[i].addr && addr < vmas[i].addr + vmas[i].len){
+      vma = vmas + i;
+      break;
+    }
+  }
+
+  if(!vma)
+    return -1;
+
+  int N = len / PGSIZE;
+  int left = len % PGSIZE;
+  if(vma->flags & MAP_SHARED){
+    for(uint64 va = addr; va < addr + len; va += PGSIZE){
+      if(uvmgetdirty(p->pagetable, va) == 0){
+        uint64 pa = walkaddr(p->pagetable, va);
+        begin_op();
+        ilock(vma->f->ip);
+        if(N){
+          N--;
+          if(writei(vma->f->ip, 0, pa, va-(vma->addr)+vma->offset, PGSIZE) < 0){
+            begin_op();
+            ilock(vma->f->ip);
+            return -1;
+          }
+        }else{
+          if(writei(vma->f->ip, 0, pa, va-(vma->addr)+vma->offset, left) < 0){
+            begin_op();
+            ilock(vma->f->ip);
+            return -1;
+          }
+        }
+        iunlock(vma->f->ip);
+        end_op();
+      }
+    }
+  }
+
+  int npages = len / PGSIZE;
+  if(left)
+   npages++;
+  uvmunmap(p->pagetable, addr, npages, 0);
+
+  if(addr == vma->addr){
+    vma->addr += len;
+    vma->offset += len;
+  }
+  vma->len -= len;
+
+  if(vma->len == 0)
+  {
+    vma->addr = 0;
+    fileclose(vma->f);
+  }
+  return 0;
+
 }
